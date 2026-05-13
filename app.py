@@ -15,17 +15,19 @@ from pose_classifier import classify_pose, POSE_COLORS, SKELETON_CONNECTIONS
 # ─────────────────────────────────────────────
 # Konstanta
 # ─────────────────────────────────────────────
-INFER_SIZE = 320
-FRAME_SKIP = 2
-WINDOW_SEC = 5
+INFER_SIZE = 320  # ukuran inference (hardcode optimal)
+FRAME_SKIP = 2    # proses model setiap 2 frame
+WINDOW_SEC = 5    # statistik berdasarkan 5 detik terakhir
 
 # ─────────────────────────────────────────────
 # Session State
 # ─────────────────────────────────────────────
 if "pose_window" not in st.session_state:
     st.session_state.pose_window = deque()
-if "last_display" not in st.session_state:
+if "last_display" not in st.session_state:   
     st.session_state.last_display = {}
+
+
 
 # ─────────────────────────────────────────────
 # Konfigurasi Halaman
@@ -60,17 +62,22 @@ st.divider()
 
 # ─────────────────────────────────────────────
 # Load Model
+# Cari file .pt di root dulu, lalu di folder models,
+# kalau tidak ada keduanya → download otomatis
 # ─────────────────────────────────────────────
 @st.cache_resource
 def load_model():
     base_dir   = os.path.dirname(os.path.abspath(__file__))
     candidates = [
-        os.path.join(base_dir, "yolov8n-pose.pt"),
-        os.path.join(base_dir, "models", "yolov8n-pose.pt"),
+        os.path.join(base_dir, "yolov8n-pose.pt"),           # root folder
+        os.path.join(base_dir, "models", "yolov8n-pose.pt"), # subfolder models
     ]
-    model_path = next((p for p in candidates if os.path.exists(p)), None)
 
+
+    model_path = next((p for p in candidates if os.path.exists(p)), None)
     m = YOLO(model_path) if model_path else YOLO("yolov8n-pose.pt")
+
+    # Warmup agar inference pertama tidak lambat
     dummy = np.zeros((INFER_SIZE, INFER_SIZE, 3), dtype=np.uint8)
     m(dummy, verbose=False)
     return m
@@ -106,80 +113,107 @@ with st.sidebar:
         "Confidence Threshold",
         min_value=0.3, max_value=0.8,
         value=0.5, step=0.05,
+        help="Rendah = lebih sensitif tapi bisa salah deteksi. Tinggi = lebih ketat."
     )
+
     show_skeleton  = st.checkbox("Tampilkan Skeleton",    value=True)
     show_keypoints = st.checkbox("Tampilkan Keypoint",    value=True)
     show_angles    = st.checkbox("Tampilkan Sudut Sendi", value=True)
 
     st.divider()
     st.subheader("🎨 Legenda Warna")
-    for emoji, label in [("🟢","Berdiri"),("🔵","Duduk"),("🟠","Jongkok"),("🟣","Berbaring"),("⚫","Tidak Terdeteksi")]:
+    for emoji, label in [
+        ("🟢", "Berdiri"),
+        ("🔵", "Duduk"),
+        ("🟠", "Jongkok"),
+        ("🟣", "Berbaring"),
+        ("⚫", "Tidak Terdeteksi"),
+    ]:
         st.write(f"{emoji} {label}")
 
     st.divider()
     st.subheader("ℹ️ Informasi Model")
-    st.info("**Model:** YOLOv8n-pose\n\n**Keypoint:** 17 titik tubuh\n\n**Kelas:** 4 pose\n\n**Dataset:** COCO Keypoints")
+    st.info(
+        "**Model:** YOLOv8n-pose\n\n"
+        "**Keypoint:** 17 titik tubuh\n\n"
+        "**Kelas:** 4 pose\n\n"
+        "**Dataset:** COCO Keypoints"
+    )
 
     st.divider()
     if st.button("🔄 Reset Statistik", use_container_width=True):
-        st.session_state.pose_window  = deque()
-        st.session_state.last_display = {}
+        st.session_state.pose_window = deque()
+
         st.rerun()
 
 # ─────────────────────────────────────────────
-# Helpers
+# Helper: Hitung statistik window 5 detik
 # ─────────────────────────────────────────────
 def get_window_stats():
     now    = time.time()
     window = st.session_state.pose_window
+
     while window and (now - window[0][0]) > WINDOW_SEC:
         window.popleft()
+
     counts = {p: 0 for p in ALL_POSES}
     for _, label in window:
         if label in counts:
             counts[label] += 1
+
     total = sum(counts.values()) or 1
     return {p: (counts[p] / total) * 100 for p in ALL_POSES}
 
+# ─────────────────────────────────────────────
+# Helper: Build HTML
+# ─────────────────────────────────────────────
 def build_pose_html(label):
     color_hex = COLOR_MAP.get(label, "#616161")
     emoji     = EMOJI_MAP.get(label, "❓")
     return (
-        f'<div style="background-color:{color_hex};padding:10px;'
-        f'border-radius:10px;text-align:center;margin:0.4rem 0;">'
-        f'<h2 style="color:white;margin:0;">{emoji} {label}</h2></div>'
+        '<div style="background-color:' + color_hex + ';padding:10px;'
+        'border-radius:10px;text-align:center;margin:0.4rem 0;">'
+        '<h2 style="color:white;margin:0;">' + emoji + ' ' + label + '</h2>'
+        '</div>'
     )
 
 def build_metrics_html(knee, hip, n_persons, fps):
-    knee_str = f"{knee:.1f}°" if knee is not None else "N/A"
-    hip_str  = f"{hip:.1f}°"  if hip  is not None else "N/A"
+    knee_str = (f"{knee:.1f}" + "°") if knee is not None else "N/A"
+    hip_str  = (f"{hip:.1f}"  + "°") if hip  is not None else "N/A"
     return (
-        f'<div style="background:#1e1e2e;padding:0.8rem 1rem;border-radius:10px;'
-        f'margin:0.4rem 0;color:#fff;font-size:0.95rem;">'
-        f'<b>📐 Sudut Lutut:</b> {knee_str}<br>'
-        f'<b>📐 Sudut Pinggul:</b> {hip_str}<br>'
-        f'<b>👥 Orang Terdeteksi:</b> {n_persons}<br>'
-        f'<b>⚡ FPS:</b> {fps}</div>'
+        '<div style="background:#1e1e2e;padding:0.8rem 1rem;border-radius:10px;'
+        'margin:0.4rem 0;color:#fff;font-size:0.95rem;">'
+        '<b>📐 Sudut Lutut:</b> '      + knee_str       + '<br>'
+        '<b>📐 Sudut Pinggul:</b> '    + hip_str        + '<br>'
+        '<b>👥 Orang Terdeteksi:</b> ' + str(n_persons) + '<br>'
+        '<b>⚡ FPS:</b> '              + str(fps)        +
+        '</div>'
     )
 
 def build_stats_html(pcts):
     rows = ""
     for pose_name in ALL_POSES:
-        pct   = pcts.get(pose_name, 0.0)
-        c_hex = COLOR_MAP.get(pose_name, "#616161")
-        em    = EMOJI_MAP.get(pose_name, "")
+        pct     = pcts.get(pose_name, 0.0)
+        c_hex   = COLOR_MAP.get(pose_name, "#616161")
+        em      = EMOJI_MAP.get(pose_name, "")
+        pct_str = f"{pct:.1f}"
         rows += (
-            f'<div style="margin:6px 0;">'
-            f'<div style="display:flex;justify-content:space-between;">'
-            f'<span style="color:#fff;">{em} {pose_name}</span>'
-            f'<span style="color:#ccc;font-size:0.85rem;">{pct:.1f}%</span></div>'
-            f'<div style="background:#444;border-radius:5px;height:12px;margin-top:3px;">'
-            f'<div style="width:{pct:.1f}%;background:{c_hex};height:12px;border-radius:5px;"></div>'
-            f'</div></div>'
+            '<div style="margin:6px 0;">'
+            '<div style="display:flex;justify-content:space-between;">'
+            '<span style="color:#fff;">' + em + ' ' + pose_name + '</span>'
+            '<span style="color:#ccc;font-size:0.85rem;">' + pct_str + '%</span>'
+            '</div>'
+            '<div style="background:#444;border-radius:5px;height:12px;margin-top:3px;">'
+            '<div style="width:' + pct_str + '%;background:' + c_hex + ';'
+            'height:12px;border-radius:5px;"></div>'
+            '</div>'
+            '</div>'
         )
     return (
-        f'<div style="background:#1e1e2e;padding:0.8rem 1rem;border-radius:10px;margin:0.4rem 0;">'
-        f'<b style="color:#fff;">📊 Statistik pose:</b><br><br>{rows}</div>'
+        '<div style="background:#1e1e2e;padding:0.8rem 1rem;border-radius:10px;margin:0.4rem 0;">'
+        '<b style="color:#fff;">📊 Statistik pose:</b><br><br>'
+        + rows +
+        '</div>'
     )
 
 # ─────────────────────────────────────────────
@@ -188,6 +222,7 @@ def build_stats_html(pcts):
 def process_frame(frame, conf_threshold, draw_skeleton, draw_keypoints, draw_angles):
     h_orig, w_orig = frame.shape[:2]
 
+    # Resize ke INFER_SIZE hanya untuk inference
     scale = INFER_SIZE / max(h_orig, w_orig)
     w_inf = int(w_orig * scale)
     h_inf = int(h_orig * scale)
@@ -197,8 +232,9 @@ def process_frame(frame, conf_threshold, draw_skeleton, draw_keypoints, draw_ang
     pose_results = []
     annotated    = frame.copy()
     num_persons  = 0
-    sx           = w_orig / w_inf
-    sy           = h_orig / h_inf
+
+    sx = w_orig / w_inf
+    sy = h_orig / h_inf
 
     for result in results:
         if result.keypoints is None:
@@ -209,31 +245,39 @@ def process_frame(frame, conf_threshold, draw_skeleton, draw_keypoints, draw_ang
         num_persons    = len(keypoints_data)
 
         for i, kps in enumerate(keypoints_data):
-            kps_orig        = kps.copy()
+            kps_orig = kps.copy()
             kps_orig[:, 0] *= sx
             kps_orig[:, 1] *= sy
 
             pose_label, angle_info = classify_pose(kps_orig)
             color = POSE_COLORS.get(pose_label, (128, 128, 128))
 
+            # ── Bounding Box ──────────────────────────────────────────
             if len(boxes_data) > i:
-                x1   = int(boxes_data[i][0] * sx)
-                y1   = int(boxes_data[i][1] * sy)
-                x2   = int(boxes_data[i][2] * sx)
-                y2   = int(boxes_data[i][3] * sy)
-                bg_y = max(y1 - 35, 0)
+                x1 = int(boxes_data[i][0] * sx)
+                y1 = int(boxes_data[i][1] * sy)
+                x2 = int(boxes_data[i][2] * sx)
+                y2 = int(boxes_data[i][3] * sy)
+
 
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                bg_y = max(y1 - 35, 0)
                 cv2.rectangle(annotated, (x1, bg_y), (x1 + 200, y1), color, -1)
-                cv2.putText(annotated, pose_label, (x1 + 5, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                cv2.putText(
+                    annotated, pose_label,
+                    (x1 + 5, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2
+                )
 
                 if draw_angles and angle_info.get("knee_angle") is not None:
-                    cv2.putText(annotated,
-                                f"Lutut: {angle_info['knee_angle']:.1f}deg",
-                                (x1 + 5, max(bg_y - 5, 0)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                    cv2.putText(
+                        annotated,
+                        "Lutut: " + f"{angle_info['knee_angle']:.1f}" + "deg",
+                        (x1 + 5, max(bg_y - 5, 0)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1
+                    )
 
+            # ── Keypoint ──────────────────────────────────────────────
             if draw_keypoints:
                 for kp in kps_orig:
                     x, y = int(kp[0]), int(kp[1])
@@ -241,6 +285,7 @@ def process_frame(frame, conf_threshold, draw_skeleton, draw_keypoints, draw_ang
                         cv2.circle(annotated, (x, y), 5, (0, 255, 255), -1)
                         cv2.circle(annotated, (x, y), 5, (0, 0, 0), 1)
 
+            # ── Skeleton ──────────────────────────────────────────────
             if draw_skeleton:
                 for pt1_idx, pt2_idx in SKELETON_CONNECTIONS:
                     if pt1_idx < len(kps_orig) and pt2_idx < len(kps_orig):
@@ -259,8 +304,8 @@ def process_frame(frame, conf_threshold, draw_skeleton, draw_keypoints, draw_ang
 
 # ─────────────────────────────────────────────
 # Video Processor (WebRTC)
-# FIX: semua config disimpan sebagai atribut agar
-#      recv() tidak baca variabel dari scope global
+
+
 # ─────────────────────────────────────────────
 class PoseProcessor(VideoProcessorBase):
     def __init__(self):
@@ -270,12 +315,17 @@ class PoseProcessor(VideoProcessorBase):
         self._lock           = threading.Lock()
         self._fps_buf        = []
         self._t_prev         = time.time()
-
-        # ← Config default; di-sync dari main thread tiap rerun
+        # ← 4 baris ini yang ditambah:
         self.confidence     = 0.5
         self.show_skeleton  = True
         self.show_keypoints = True
         self.show_angles    = True
+
+
+
+
+
+
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
@@ -283,6 +333,7 @@ class PoseProcessor(VideoProcessorBase):
 
         self._frame_counter += 1
 
+        # Hitung FPS stream (rata-rata 15 frame)
         now = time.time()
         dt  = max(now - self._t_prev, 1e-9)
         self._t_prev = now
@@ -291,16 +342,16 @@ class PoseProcessor(VideoProcessorBase):
             self._fps_buf.pop(0)
         stream_fps = round(sum(self._fps_buf) / len(self._fps_buf), 1)
 
-        # Baca config dari atribut sendiri (thread-safe, tidak baca global)
-        conf       = self.confidence
-        skeleton   = self.show_skeleton
-        keypoints  = self.show_keypoints
-        angles     = self.show_angles
-
+        conf      = self.confidence
+        skeleton  = self.show_skeleton
+        keypoints = self.show_keypoints
+        angles    = self.show_angles
+        
         if self._frame_counter % FRAME_SKIP == 0:
             annotated, pose_results, num_persons = process_frame(
                 img, conf, skeleton, keypoints, angles
             )
+
             with self._lock:
                 self._last_annotated = annotated
 
@@ -319,10 +370,12 @@ class PoseProcessor(VideoProcessorBase):
             with self._lock:
                 annotated = self._last_annotated if self._last_annotated is not None else img
 
+        # FPS overlay di frame
         cv2.putText(
-            annotated, f"FPS: {stream_fps}",
-            (10, 35), cv2.FONT_HERSHEY_SIMPLEX,
-            1.0, (0, 255, 0), 2, cv2.LINE_AA
+            annotated,
+            "FPS: " + str(stream_fps),
+            (10, 35),
+            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2, cv2.LINE_AA
         )
 
         rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
@@ -359,14 +412,20 @@ with col_info:
     stats_placeholder   = st.empty()
 
 # ─────────────────────────────────────────────
-# Tampilan Default
+# Tampilan Default (sebelum stream aktif)
 # ─────────────────────────────────────────────
-pose_placeholder.markdown(build_pose_html("Tidak Terdeteksi"), unsafe_allow_html=True)
-metrics_placeholder.markdown(build_metrics_html(None, None, 0, 0), unsafe_allow_html=True)
-stats_placeholder.markdown(build_stats_html({p: 0.0 for p in ALL_POSES}), unsafe_allow_html=True)
+pose_placeholder.markdown(
+    build_pose_html("Tidak Terdeteksi"), unsafe_allow_html=True
+)
+metrics_placeholder.markdown(
+    build_metrics_html(None, None, 0, 0), unsafe_allow_html=True
+)
+stats_placeholder.markdown(
+    build_stats_html({p: 0.0 for p in ALL_POSES}), unsafe_allow_html=True
+)
 
 # ─────────────────────────────────────────────
-# Loop Update Panel Info
+# Loop Update Panel Info (saat stream aktif)
 # ─────────────────────────────────────────────
 if ctx.state.playing and ctx.video_processor:
     # Sync config ke processor (main thread → recv thread)
@@ -402,9 +461,8 @@ if ctx.state.playing and ctx.video_processor:
         )
         stats_placeholder.markdown(build_stats_html(pcts), unsafe_allow_html=True)
 
-    time.sleep(0.05)  # ~20 Hz UI refresh
+    time.sleep(0.05)
     st.rerun()
-
 # ─────────────────────────────────────────────
 # Footer
 # ─────────────────────────────────────────────
