@@ -349,7 +349,7 @@ class PoseProcessor(VideoProcessorBase):
         
         if self._frame_counter % FRAME_SKIP == 0:
             annotated, pose_results, num_persons = process_frame(
-                img, conf, skeleton, keypoints, angles
+                img, self.confidence, self.show_skeleton, self.show_keypoints, self.show_angles
             )
 
             with self._lock:
@@ -428,41 +428,36 @@ stats_placeholder.markdown(
 # Loop Update Panel Info (saat stream aktif)
 # ─────────────────────────────────────────────
 if ctx.state.playing and ctx.video_processor:
-    # Sync config ke processor (main thread → recv thread)
+    # Sync config (dari kode baru, ini bagus)
     ctx.video_processor.confidence     = confidence
     ctx.video_processor.show_skeleton  = show_skeleton
     ctx.video_processor.show_keypoints = show_keypoints
     ctx.video_processor.show_angles    = show_angles
 
-    # Non-blocking poll — tidak ada while True!
-    try:
-        result = ctx.video_processor.result_queue.get_nowait()
-        st.session_state.last_display = {
-            "label"    : result.get("pose", "Tidak Terdeteksi"),
-            "knee"     : result.get("knee_angle"),
-            "hip"      : result.get("hip_angle"),
-            "fps"      : result.get("fps", 0.0),
-            "n_persons": result.get("num_persons", 0),
-        }
-        ts = result.get("timestamp", time.time())
-        if st.session_state.last_display["label"] in ALL_POSES:
-            st.session_state.pose_window.append((ts, st.session_state.last_display["label"]))
-    except queue.Empty:
-        pass
+    # Loop dari kode lama (jangan pakai st.rerun)
+    while True:
+        if ctx.video_processor is None:
+            time.sleep(0.1)
+            continue
+        try:
+            result = ctx.video_processor.result_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
 
-    # Render dari session state (pakai data terakhir jika queue kosong)
-    disp = st.session_state.last_display
-    if disp:
+        label     = result.get("pose", "Tidak Terdeteksi")
+        knee      = result.get("knee_angle")
+        hip       = result.get("hip_angle")
+        fps       = result.get("fps", 0.0)
+        n_persons = result.get("num_persons", 0)
+        timestamp = result.get("timestamp", time.time())
+
+        if label in ALL_POSES:
+            st.session_state.pose_window.append((timestamp, label))
+
         pcts = get_window_stats()
-        pose_placeholder.markdown(build_pose_html(disp["label"]), unsafe_allow_html=True)
-        metrics_placeholder.markdown(
-            build_metrics_html(disp["knee"], disp["hip"], disp["n_persons"], disp["fps"]),
-            unsafe_allow_html=True
-        )
+        pose_placeholder.markdown(build_pose_html(label), unsafe_allow_html=True)
+        metrics_placeholder.markdown(build_metrics_html(knee, hip, n_persons, fps), unsafe_allow_html=True)
         stats_placeholder.markdown(build_stats_html(pcts), unsafe_allow_html=True)
-
-    time.sleep(0.05)
-    st.rerun()
 # ─────────────────────────────────────────────
 # Footer
 # ─────────────────────────────────────────────
