@@ -24,10 +24,6 @@ WINDOW_SEC = 5    # statistik berdasarkan 5 detik terakhir
 # ─────────────────────────────────────────────
 if "pose_window" not in st.session_state:
     st.session_state.pose_window = deque()
-if "last_display" not in st.session_state:   
-    st.session_state.last_display = {}
-
-
 
 # ─────────────────────────────────────────────
 # Konfigurasi Halaman
@@ -73,9 +69,18 @@ def load_model():
         os.path.join(base_dir, "models", "yolov8n-pose.pt"), # subfolder models
     ]
 
+    model_path = None
+    for path in candidates:
+        if os.path.exists(path):
+            model_path = path
+            break
 
-    model_path = next((p for p in candidates if os.path.exists(p)), None)
-    m = YOLO(model_path) if model_path else YOLO("yolov8n-pose.pt")
+    if model_path:
+        m = YOLO(model_path)
+    else:
+        # Download otomatis dari ultralytics (butuh internet)
+        st.info("📥 Model tidak ditemukan, mendownload otomatis...")
+        m = YOLO("yolov8n-pose.pt")
 
     # Warmup agar inference pertama tidak lambat
     dummy = np.zeros((INFER_SIZE, INFER_SIZE, 3), dtype=np.uint8)
@@ -143,7 +148,6 @@ with st.sidebar:
     st.divider()
     if st.button("🔄 Reset Statistik", use_container_width=True):
         st.session_state.pose_window = deque()
-
         st.rerun()
 
 # ─────────────────────────────────────────────
@@ -259,7 +263,6 @@ def process_frame(frame, conf_threshold, draw_skeleton, draw_keypoints, draw_ang
                 x2 = int(boxes_data[i][2] * sx)
                 y2 = int(boxes_data[i][3] * sy)
 
-
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
                 bg_y = max(y1 - 35, 0)
                 cv2.rectangle(annotated, (x1, bg_y), (x1 + 200, y1), color, -1)
@@ -304,8 +307,6 @@ def process_frame(frame, conf_threshold, draw_skeleton, draw_keypoints, draw_ang
 
 # ─────────────────────────────────────────────
 # Video Processor (WebRTC)
-
-
 # ─────────────────────────────────────────────
 class PoseProcessor(VideoProcessorBase):
     def __init__(self):
@@ -315,17 +316,6 @@ class PoseProcessor(VideoProcessorBase):
         self._lock           = threading.Lock()
         self._fps_buf        = []
         self._t_prev         = time.time()
-        # ← 4 baris ini yang ditambah:
-        self.confidence     = 0.5
-        self.show_skeleton  = True
-        self.show_keypoints = True
-        self.show_angles    = True
-
-
-
-
-
-
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
@@ -342,14 +332,10 @@ class PoseProcessor(VideoProcessorBase):
             self._fps_buf.pop(0)
         stream_fps = round(sum(self._fps_buf) / len(self._fps_buf), 1)
 
-        conf      = self.confidence
-        skeleton  = self.show_skeleton
-        keypoints = self.show_keypoints
-        angles    = self.show_angles
-        
+        # Inference hanya setiap FRAME_SKIP frame
         if self._frame_counter % FRAME_SKIP == 0:
             annotated, pose_results, num_persons = process_frame(
-                img, self.confidence, self.show_skeleton, self.show_keypoints, self.show_angles
+                img, confidence, show_skeleton, show_keypoints, show_angles
             )
 
             with self._lock:
@@ -427,18 +413,12 @@ stats_placeholder.markdown(
 # ─────────────────────────────────────────────
 # Loop Update Panel Info (saat stream aktif)
 # ─────────────────────────────────────────────
-if ctx.state.playing and ctx.video_processor:
-    # Sync config (dari kode baru, ini bagus)
-    ctx.video_processor.confidence     = confidence
-    ctx.video_processor.show_skeleton  = show_skeleton
-    ctx.video_processor.show_keypoints = show_keypoints
-    ctx.video_processor.show_angles    = show_angles
-
-    # Loop dari kode lama (jangan pakai st.rerun)
+if ctx.state.playing:
     while True:
         if ctx.video_processor is None:
             time.sleep(0.1)
             continue
+
         try:
             result = ctx.video_processor.result_queue.get(timeout=0.1)
         except queue.Empty:
@@ -451,13 +431,24 @@ if ctx.state.playing and ctx.video_processor:
         n_persons = result.get("num_persons", 0)
         timestamp = result.get("timestamp", time.time())
 
+        # Tambahkan ke window (hanya pose valid)
         if label in ALL_POSES:
             st.session_state.pose_window.append((timestamp, label))
 
+        # Hitung statistik window 5 detik terakhir
         pcts = get_window_stats()
-        pose_placeholder.markdown(build_pose_html(label), unsafe_allow_html=True)
-        metrics_placeholder.markdown(build_metrics_html(knee, hip, n_persons, fps), unsafe_allow_html=True)
-        stats_placeholder.markdown(build_stats_html(pcts), unsafe_allow_html=True)
+
+        # Render panel
+        pose_placeholder.markdown(
+            build_pose_html(label), unsafe_allow_html=True
+        )
+        metrics_placeholder.markdown(
+            build_metrics_html(knee, hip, n_persons, fps), unsafe_allow_html=True
+        )
+        stats_placeholder.markdown(
+            build_stats_html(pcts), unsafe_allow_html=True
+        )
+
 # ─────────────────────────────────────────────
 # Footer
 # ─────────────────────────────────────────────
