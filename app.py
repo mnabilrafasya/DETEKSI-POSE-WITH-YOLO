@@ -16,7 +16,7 @@ from pose_classifier import classify_pose, POSE_COLORS, SKELETON_CONNECTIONS
 # ─────────────────────────────────────────────
 # Konstanta
 # ─────────────────────────────────────────────
-INFER_SIZE = 256  # ukuran inference (hardcode optimal)
+INFER_SIZE = 320  # ukuran inference (hardcode optimal)
 FRAME_SKIP = 1    # proses model setiap 2 frame
 WINDOW_SEC = 5    # statistik berdasarkan 5 detik terakhir
 INFER_INTERVAL = 0.15  # inference setiap 150ms (±6-7 FPS inference)
@@ -32,7 +32,6 @@ if "pose_window" not in st.session_state:
 # ─────────────────────────────────────────────
 st.set_page_config(
     page_title="Deteksi Pose Tubuh Realtime",
-    page_icon="🤸",
     layout="wide"
 )
 
@@ -54,7 +53,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-title">🤸 Deteksi Pose Tubuh Realtime</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">Deteksi Pose Tubuh Realtime</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Proyek Akhir Jaringan Syaraf Tiruan &nbsp;|&nbsp; YOLOv8 Pose + Streamlit</div>', unsafe_allow_html=True)
 st.divider()
 
@@ -313,15 +312,16 @@ def process_frame(frame, conf_threshold, draw_skeleton, draw_keypoints, draw_ang
 class PoseProcessor(VideoProcessorBase):
     def __init__(self):
         self.result_queue    = queue.Queue(maxsize=1)
-        self._frame_queue    = queue.Queue(maxsize=1)  # input ke inference thread
+        self._frame_queue    = queue.Queue(maxsize=1)
         self._last_annotated = None
         self._lock           = threading.Lock()
+    
+        # FPS output (bukan FPS stream input)
         self._fps_buf        = []
-        self._t_prev         = time.time()
+        self._last_out_time  = time.time()   # catat waktu frame KELUAR
+    
         self._running        = True
-
-        # Inference thread terpisah — tidak memblokir WebRTC
-        self._infer_thread = threading.Thread(target=self._inference_loop, daemon=True)
+        self._infer_thread   = threading.Thread(target=self._inference_loop, daemon=True)
         self._infer_thread.start()
 
     def _inference_loop(self):
@@ -356,34 +356,36 @@ class PoseProcessor(VideoProcessorBase):
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         img = cv2.flip(img, 1)
-
-        # Hitung FPS stream
-        now = time.time()
-        dt  = max(now - self._t_prev, 1e-9)
-        self._t_prev = now
-        self._fps_buf.append(1.0 / dt)
-        if len(self._fps_buf) > 20:
-            self._fps_buf.pop(0)
-        stream_fps = round(sum(self._fps_buf) / len(self._fps_buf), 1)
-
-        # Kirim frame ke inference thread (drop kalau penuh — non-blocking)
+    
+        # Kirim ke inference thread (drop kalau penuh)
         if not self._frame_queue.full():
             self._frame_queue.put_nowait(img.copy())
-
-        # Ambil frame yang sudah dianotasi (atau raw kalau belum ada)
+    
+        # Ambil frame teranotasi
         with self._lock:
             out = self._last_annotated if self._last_annotated is not None else img
-
-        # FPS overlay — operasi ringan, aman di WebRTC thread
+    
         out = out.copy()
+    
+        # ── FPS output yang benar ──────────────────────────────────────
+        # Hitung berdasarkan frame yang BENAR-BENAR dikirim balik ke browser
+        now = time.time()
+        dt  = max(now - self._last_out_time, 1e-9)
+        self._last_out_time = now
+        self._fps_buf.append(1.0 / dt)
+        if len(self._fps_buf) > 30:
+            self._fps_buf.pop(0)
+        # Pakai median bukan mean → lebih stabil, tidak meledak saat spike
+        display_fps = round(float(np.median(self._fps_buf)), 1)
+    
         cv2.putText(
-            out, f"FPS: {stream_fps}",
+            out, f"FPS: {display_fps}",
             (10, 35), cv2.FONT_HERSHEY_SIMPLEX,
             1.0, (0, 255, 0), 2, cv2.LINE_AA
         )
-
+    
         rgb = cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
-        return av.VideoFrame.from_ndarray(rgb, format="rgb24")
+    return av.VideoFrame.from_ndarray(rgb, format="rgb24")
 
     def __del__(self):
         self._running = False
@@ -429,9 +431,9 @@ with col_video:
         video_processor_factory=PoseProcessor,
         media_stream_constraints={
             "video": {
-                "width"    : {"ideal": 320},
-                "height"   : {"ideal": 240},
-                "frameRate": {"ideal": 15},
+                "width"    : {"ideal": 480},
+                "height"   : {"ideal": 360},
+                "frameRate": {"ideal": 15, "max": 20},
             },
             "audio": False,
         },
@@ -512,7 +514,7 @@ update_dashboard_info()
 st.divider()
 st.markdown(
     '<div style="text-align:center;color:#aaa;font-size:0.8rem;">'
-    '🤸 Deteksi Pose Tubuh Realtime &nbsp;|&nbsp; YOLOv8 + Streamlit &nbsp;|&nbsp; Proyek Akhir JST'
+    'Deteksi Pose Tubuh Realtime &nbsp;|&nbsp; YOLOv8 + Streamlit &nbsp;|&nbsp; Proyek Akhir JST'
     '</div>',
     unsafe_allow_html=True
 )
