@@ -437,11 +437,21 @@ if ctx.video_processor:
     ctx.video_processor.draw_ang = show_angles
 
 # Gunakan fitur Fragment agar UI melakukan refresh mandiri tanpa mengunci server utama
-@st.fragment(run_every=0.2) # Mengupdate panel info setiap 200ms secara asinkronus
+@st.fragment(run_every=0.3)
 def update_dashboard_info():
-    if ctx.state.playing and ctx.video_processor is not None:
+    # TAMBAHKAN VALIDASI INI: Pastikan objek ctx dan ctx.state sudah terinisialisasi oleh Streamlit
+    if ctx is None or not hasattr(ctx, "state") or ctx.state is None:
+        return
+
+    # Gunakan try-except ekstra untuk mengamankan pembacaan status session
+    try:
+        is_playing = ctx.state.playing
+    except Exception:
+        is_playing = False
+
+    if is_playing and ctx.video_processor is not None:
         try:
-            # Ambil data terbaru dari antrean tanpa memblokir thread (get_nowait)
+            # Ambil data terbaru dari antrean tanpa mengunci thread utama cloud
             result = ctx.video_processor.result_queue.get_nowait()
             
             label     = result.get("pose", "Tidak Terdeteksi")
@@ -456,21 +466,20 @@ def update_dashboard_info():
 
             pcts = get_window_stats()
 
-            # Perbarui komponen UI secara aman
+            # Timpa isi data pada kontainer secara aman
             pose_placeholder.markdown(build_pose_html(label), unsafe_allow_html=True)
             metrics_placeholder.markdown(build_metrics_html(knee, hip, n_persons, fps), unsafe_allow_html=True)
             stats_placeholder.markdown(build_stats_html(pcts), unsafe_allow_html=True)
             
         except queue.Empty:
-            # Jika antrean kosong, biarkan tampilan terakhir tetap muncul
             pass
     else:
-        # Tampilan Default saat kamera mati
+        # Tampilan Default saat kamera mati / sebelum start
         pose_placeholder.markdown(build_pose_html("Tidak Terdeteksi"), unsafe_allow_html=True)
         metrics_placeholder.markdown(build_metrics_html(None, None, 0, 0), unsafe_allow_html=True)
         stats_placeholder.markdown(build_stats_html({p: 0.0 for p in ALL_POSES}), unsafe_allow_html=True)
 
-# Panggil fungsi fragment tersebut
+# Panggil fungsi fragment di akhir skrip
 update_dashboard_info()
 
 
