@@ -17,8 +17,9 @@ from pose_classifier import classify_pose, POSE_COLORS, SKELETON_CONNECTIONS
 # Konstanta
 # ─────────────────────────────────────────────
 INFER_SIZE = 256  # ukuran inference (hardcode optimal)
-FRAME_SKIP = 4    # proses model setiap 2 frame
+FRAME_SKIP = 1    # proses model setiap 2 frame
 WINDOW_SEC = 5    # statistik berdasarkan 5 detik terakhir
+INFER_INTERVAL = 0.15  # inference setiap 150ms (±6-7 FPS inference)
 
 # ─────────────────────────────────────────────
 # Session State
@@ -311,62 +312,81 @@ def process_frame(frame, conf_threshold, draw_skeleton, draw_keypoints, draw_ang
 # ─────────────────────────────────────────────
 class PoseProcessor(VideoProcessorBase):
     def __init__(self):
-        self.result_queue    = queue.Queue(maxsize=3)
-        self._frame_counter  = 0
+        self.result_queue    = queue.Queue(maxsize=1)
+        self._frame_queue    = queue.Queue(maxsize=1)  # input ke inference thread
         self._last_annotated = None
         self._lock           = threading.Lock()
         self._fps_buf        = []
         self._t_prev         = time.time()
+        self._running        = True
+
+        # Inference thread terpisah — tidak memblokir WebRTC
+        self._infer_thread = threading.Thread(target=self._inference_loop, daemon=True)
+        self._infer_thread.start()
+
+    def _inference_loop(self):
+        """Berjalan di thread terpisah; baca frame, jalankan YOLO, simpan hasil."""
+        while self._running:
+            try:
+                img = self._frame_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            try:
+                annotated, pose_results, num_persons = process_frame(
+                    img, confidence, show_skeleton, show_keypoints, show_angles
+                )
+                with self._lock:
+                    self._last_annotated = annotated
+
+                if pose_results:
+                    data = {
+                        **pose_results[0],
+                        "num_persons": num_persons,
+                        "timestamp"  : time.time(),
+                    }
+                    # Buang result lama kalau antrian penuh (non-blocking)
+                    if self.result_queue.full():
+                        try: self.result_queue.get_nowait()
+                        except queue.Empty: pass
+                    self.result_queue.put_nowait(data)
+            except Exception as e:
+                print(f"[inference error] {e}")
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         img = cv2.flip(img, 1)
 
-        self._frame_counter += 1
-
-        # Hitung FPS stream (rata-rata 15 frame)
+        # Hitung FPS stream
         now = time.time()
         dt  = max(now - self._t_prev, 1e-9)
         self._t_prev = now
         self._fps_buf.append(1.0 / dt)
-        if len(self._fps_buf) > 15:
+        if len(self._fps_buf) > 20:
             self._fps_buf.pop(0)
         stream_fps = round(sum(self._fps_buf) / len(self._fps_buf), 1)
 
-        # Inference hanya setiap FRAME_SKIP frame
-        if self._frame_counter % FRAME_SKIP == 0:
-            annotated, pose_results, num_persons = process_frame(
-                img, confidence, show_skeleton, show_keypoints, show_angles
-            )
+        # Kirim frame ke inference thread (drop kalau penuh — non-blocking)
+        if not self._frame_queue.full():
+            self._frame_queue.put_nowait(img.copy())
 
-            with self._lock:
-                self._last_annotated = annotated
+        # Ambil frame yang sudah dianotasi (atau raw kalau belum ada)
+        with self._lock:
+            out = self._last_annotated if self._last_annotated is not None else img
 
-            if pose_results:
-                data = pose_results[0].copy()
-                data["fps"]         = stream_fps
-                data["num_persons"] = num_persons
-                data["timestamp"]   = now
-                if self.result_queue.full():
-                    try:
-                        self.result_queue.get_nowait()
-                    except queue.Empty:
-                        pass
-                self.result_queue.put_nowait(data)
-        else:
-            with self._lock:
-                annotated = self._last_annotated if self._last_annotated is not None else img
-
-        # FPS overlay di frame
+        # FPS overlay — operasi ringan, aman di WebRTC thread
+        out = out.copy()
         cv2.putText(
-            annotated,
-            "FPS: " + str(stream_fps),
-            (10, 35),
-            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2, cv2.LINE_AA
+            out, f"FPS: {stream_fps}",
+            (10, 35), cv2.FONT_HERSHEY_SIMPLEX,
+            1.0, (0, 255, 0), 2, cv2.LINE_AA
         )
 
-        rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
         return av.VideoFrame.from_ndarray(rgb, format="rgb24")
+
+    def __del__(self):
+        self._running = False
 
 # ─────────────────────────────────────────────
 # Layout Utama
@@ -394,7 +414,10 @@ def get_twilio_ice_servers():
         print(f"[CRASH SISTEM]: Gagal memanggil API Twilio. Detail kendala: {e}")
     
     # Jika Twilio benar-benar gagal, cadangan terakhir beralih ke STUN bawaan browser
-    return [{"urls": ["stun:google.com"]}]
+    return [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {"urls": ["stun:stun1.l.google.com:19302"]},
+    ]
 
 
 active_ice_servers = get_twilio_ice_servers()
@@ -437,7 +460,7 @@ if ctx.video_processor:
     ctx.video_processor.draw_ang = show_angles
 
 # Gunakan fitur Fragment agar UI melakukan refresh mandiri tanpa mengunci server utama
-@st.fragment(run_every=0.3)
+@st.fragment(run_every=1.0)
 def update_dashboard_info():
     # TAMBAHKAN VALIDASI INI: Pastikan objek ctx dan ctx.state sudah terinisialisasi oleh Streamlit
     if ctx is None or not hasattr(ctx, "state") or ctx.state is None:
