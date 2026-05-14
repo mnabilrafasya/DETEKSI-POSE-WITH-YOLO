@@ -385,7 +385,7 @@ class PoseProcessor(VideoProcessorBase):
         )
     
         rgb = cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
-    return av.VideoFrame.from_ndarray(rgb, format="rgb24")
+        return av.VideoFrame.from_ndarray(rgb, format="rgb24")
 
     def __del__(self):
         self._running = False
