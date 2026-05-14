@@ -398,7 +398,8 @@ with col_video:
                     "username": "openrelayproject",
                     "credential": "openrelayproject"
                 }
-            ]
+            ],
+            "iceTransportPolicy": "relay" 
         },
     )
 
