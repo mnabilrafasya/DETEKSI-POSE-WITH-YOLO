@@ -387,80 +387,64 @@ with col_video:
         },
         async_processing=True,
         rtc_configuration={
-            "iceServers": [
-                {"urls": ["stun:stun.l.google.com:19302"]},
-                {"urls": ["stun:stun1.l.google.com:19302"]},
-                {"urls": ["stun:stun2.l.google.com:19302"]},
-                {"urls": ["stun:openrelay.metered.ca:80"]},
-                {
-                    "urls": [
-                        "turn:openrelay.metered.ca:80",
-                        "turn:openrelay.metered.ca:443",
-                    ],
-                    "username": "openrelayproject",
-                    "credential": "openrelayproject",
-                },
-            ]
+            "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
         },
     )
 
-with col_info:
-    st.subheader("📊 Hasil Deteksi")
-    pose_placeholder    = st.empty()
-    metrics_placeholder = st.empty()
-    stats_placeholder   = st.empty()
-
-# ─────────────────────────────────────────────
-# Tampilan Default (sebelum stream aktif)
-# ─────────────────────────────────────────────
-pose_placeholder.markdown(
-    build_pose_html("Tidak Terdeteksi"), unsafe_allow_html=True
-)
-metrics_placeholder.markdown(
-    build_metrics_html(None, None, 0, 0), unsafe_allow_html=True
-)
-stats_placeholder.markdown(
-    build_stats_html({p: 0.0 for p in ALL_POSES}), unsafe_allow_html=True
-)
 
 # ─────────────────────────────────────────────
 # Loop Update Panel Info (saat stream aktif)
 # ─────────────────────────────────────────────
-if ctx.state.playing:
-    while True:
-        if ctx.video_processor is None:
-            time.sleep(0.1)
-            continue
+# Tempatkan placeholder di kolom info
+with col_info:
+    st.subheader("📊 Hasil Deteksi")
+    pose_placeholder = st.empty()
+    metrics_placeholder = st.empty()
+    stats_placeholder = st.empty()
 
+if ctx.video_processor:
+    ctx.video_processor.conf = confidence
+    ctx.video_processor.draw_skel = show_skeleton
+    ctx.video_processor.draw_kp = show_keypoints
+    ctx.video_processor.draw_ang = show_angles
+
+# Gunakan fitur Fragment agar UI melakukan refresh mandiri tanpa mengunci server utama
+@st.fragment(run_every=0.2) # Mengupdate panel info setiap 200ms secara asinkronus
+def update_dashboard_info():
+    if ctx.state.playing and ctx.video_processor is not None:
         try:
-            result = ctx.video_processor.result_queue.get(timeout=0.1)
+            # Ambil data terbaru dari antrean tanpa memblokir thread (get_nowait)
+            result = ctx.video_processor.result_queue.get_nowait()
+            
+            label     = result.get("pose", "Tidak Terdeteksi")
+            knee      = result.get("knee_angle")
+            hip       = result.get("hip_angle")
+            fps       = result.get("fps", 0.0)
+            n_persons = result.get("num_persons", 0)
+            timestamp = result.get("timestamp", time.time())
+
+            if label in ALL_POSES:
+                st.session_state.pose_window.append((timestamp, label))
+
+            pcts = get_window_stats()
+
+            # Perbarui komponen UI secara aman
+            pose_placeholder.markdown(build_pose_html(label), unsafe_allow_html=True)
+            metrics_placeholder.markdown(build_metrics_html(knee, hip, n_persons, fps), unsafe_allow_html=True)
+            stats_placeholder.markdown(build_stats_html(pcts), unsafe_allow_html=True)
+            
         except queue.Empty:
-            continue
+            # Jika antrean kosong, biarkan tampilan terakhir tetap muncul
+            pass
+    else:
+        # Tampilan Default saat kamera mati
+        pose_placeholder.markdown(build_pose_html("Tidak Terdeteksi"), unsafe_allow_html=True)
+        metrics_placeholder.markdown(build_metrics_html(None, None, 0, 0), unsafe_allow_html=True)
+        stats_placeholder.markdown(build_stats_html({p: 0.0 for p in ALL_POSES}), unsafe_allow_html=True)
 
-        label     = result.get("pose", "Tidak Terdeteksi")
-        knee      = result.get("knee_angle")
-        hip       = result.get("hip_angle")
-        fps       = result.get("fps", 0.0)
-        n_persons = result.get("num_persons", 0)
-        timestamp = result.get("timestamp", time.time())
+# Panggil fungsi fragment tersebut
+update_dashboard_info()
 
-        # Tambahkan ke window (hanya pose valid)
-        if label in ALL_POSES:
-            st.session_state.pose_window.append((timestamp, label))
-
-        # Hitung statistik window 5 detik terakhir
-        pcts = get_window_stats()
-
-        # Render panel
-        pose_placeholder.markdown(
-            build_pose_html(label), unsafe_allow_html=True
-        )
-        metrics_placeholder.markdown(
-            build_metrics_html(knee, hip, n_persons, fps), unsafe_allow_html=True
-        )
-        stats_placeholder.markdown(
-            build_stats_html(pcts), unsafe_allow_html=True
-        )
 
 # ─────────────────────────────────────────────
 # Footer
