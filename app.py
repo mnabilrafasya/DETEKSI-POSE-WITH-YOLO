@@ -377,18 +377,25 @@ TWILIO_ACCOUNT_SID = st.secrets["TWILIO_ACCOUNT_SID"]
 TWILIO_AUTH_TOKEN  = st.secrets["TWILIO_AUTH_TOKEN"]
 
 def get_twilio_ice_servers():
+    """Fungsi resmi mengambil token jalan TURN terverifikasi dari server Twilio dengan URL Akurat"""
     try:
-        # Alamat API URL resmi Twilio yang benar
-        url = f"twilio.com{TWILIO_ACCOUNT_SID}/Tokens.json"
+        # Penulisan URL API Twilio yang wajib dan akurat (Menggunakan HTTPS dan jalur versi 2010)
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Tokens.json"
+        
         response = requests.post(url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=5)
+        
         if response.status_code == 201:
             token_data = response.json()
+            # API Twilio akan mengembalikan daftar berisi seluruh IP Server STUN & TURN resmi mereka
             return token_data["ice_servers"]
+        else:
+            print(f"[API TWILIO EROR]: Kode Status {response.status_code}. Periksa isi Secrets Anda.")
     except Exception as e:
-        print(f"[API ERROR]: Gagal menarik token Twilio. {e}")
+        print(f"[CRASH SISTEM]: Gagal memanggil API Twilio. Detail kendala: {e}")
     
-    # Cadangan darurat jika API Twilio gagal merespons sejenak
-    return [{"urls": ["stun:global.turn.metered.ca:80"]}]
+    # Jika Twilio benar-benar gagal, cadangan terakhir beralih ke STUN bawaan browser
+    return [{"urls": ["stun:google.com"]}]
+
 
 active_ice_servers = get_twilio_ice_servers()
 
