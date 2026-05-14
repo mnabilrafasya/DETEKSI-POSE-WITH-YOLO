@@ -16,8 +16,8 @@ from pose_classifier import classify_pose, POSE_COLORS, SKELETON_CONNECTIONS
 # ─────────────────────────────────────────────
 # Konstanta
 # ─────────────────────────────────────────────
-INFER_SIZE = 320  # ukuran inference (hardcode optimal)
-FRAME_SKIP = 2    # proses model setiap 2 frame
+INFER_SIZE = 256  # ukuran inference (hardcode optimal)
+FRAME_SKIP = 4    # proses model setiap 2 frame
 WINDOW_SEC = 5    # statistik berdasarkan 5 detik terakhir
 
 # ─────────────────────────────────────────────
@@ -406,9 +406,9 @@ with col_video:
         video_processor_factory=PoseProcessor,
         media_stream_constraints={
             "video": {
-                "width"    : {"ideal": 640},
-                "height"   : {"ideal": 480},
-                "frameRate": {"ideal": 30},
+                "width"    : {"ideal": 320},
+                "height"   : {"ideal": 240},
+                "frameRate": {"ideal": 15},
             },
             "audio": False,
         },
