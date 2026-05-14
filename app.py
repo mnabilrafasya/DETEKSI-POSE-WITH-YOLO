@@ -9,6 +9,7 @@ import os
 import queue
 import threading
 from collections import deque
+import requests
 
 from pose_classifier import classify_pose, POSE_COLORS, SKELETON_CONNECTIONS
 
@@ -372,6 +373,25 @@ class PoseProcessor(VideoProcessorBase):
 # ─────────────────────────────────────────────
 col_video, col_info = st.columns([2, 1])
 
+TWILIO_ACCOUNT_SID = st.secrets["TWILIO_ACCOUNT_SID"]
+TWILIO_AUTH_TOKEN  = st.secrets["TWILIO_AUTH_TOKEN"]
+
+def get_twilio_ice_servers():
+    try:
+        # Alamat API URL resmi Twilio yang benar
+        url = f"twilio.com{TWILIO_ACCOUNT_SID}/Tokens.json"
+        response = requests.post(url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=5)
+        if response.status_code == 201:
+            token_data = response.json()
+            return token_data["ice_servers"]
+    except Exception as e:
+        print(f"[API ERROR]: Gagal menarik token Twilio. {e}")
+    
+    # Cadangan darurat jika API Twilio gagal merespons sejenak
+    return [{"urls": ["stun:global.turn.metered.ca:80"]}]
+
+active_ice_servers = get_twilio_ice_servers()
+
 with col_video:
     st.subheader("📷 Feed Kamera")
     ctx = webrtc_streamer(
@@ -386,21 +406,10 @@ with col_video:
             "audio": False,
         },
         async_processing=True,
-        rtc_config = {
-            "iceServers": [
-                {"urls": ["stun:openrelay.metered.ca:80"]},
-                {
-                    "urls": [
-                        "turn:openrelay.metered.ca:80",
-                        "turn:openrelay.metered.ca:443",
-                        "turn:openrelay.metered.ca:443?transport=tcp"
-                    ],
-                    "username": "openrelayproject",
-                    "credential": "openrelayproject"
-                }
-            ],
-            "iceTransportPolicy": "all" 
-        }
+        rtc_configuration={
+            "iceServers": active_ice_servers,
+            "iceTransportPolicy": "all"
+        },
     )
 
 
