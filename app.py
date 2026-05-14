@@ -386,7 +386,7 @@ with col_video:
             "audio": False,
         },
         async_processing=True,
-        rtc_configuration={
+        rtc_config = {
             "iceServers": [
                 {"urls": ["stun:openrelay.metered.ca:80"]},
                 {
@@ -399,8 +399,8 @@ with col_video:
                     "credential": "openrelayproject"
                 }
             ],
-            "iceTransportPolicy": "relay" 
-        },
+            "iceTransportPolicy": "all" 
+        }
     )
 
 
